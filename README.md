@@ -26,10 +26,28 @@ repo to install.
 -   [**AlloyDB Basics**](./skills/cloud/alloydb-basics)
 -   [**BigQuery Basics**](./skills/cloud/bigquery-basics)
 -   [**BigQuery AI & ML**](./skills/cloud/bigquery-ai-ml)
+-   [**Bigtable Basics**](./skills/cloud/bigtable-basics)
 -   [**Cloud Run Basics**](./skills/cloud/cloud-run-basics)
 -   [**Cloud SQL Basics**](./skills/cloud/cloud-sql-basics)
 -   [**Firebase Basics**](./skills/cloud/firebase-basics)
--   [**Kubernetes Engine (GKE) Basics**](./skills/cloud/gke-basics)
+-   **Kubernetes Engine (GKE)**:
+    -   [Basics](./skills/cloud/gke-basics)
+    -   [App Onboarding](./skills/cloud/gke-app-onboarding)
+    -   [Backup & DR](./skills/cloud/gke-backup-dr)
+    -   [Batch & HPC](./skills/cloud/gke-batch-hpc)
+    -   [Cluster Creation](./skills/cloud/gke-cluster-creation)
+    -   [Compute Classes](./skills/cloud/gke-compute-classes)
+    -   [Cost Optimization](./skills/cloud/gke-cost)
+    -   [Golden Path](./skills/cloud/gke-golden-path)
+    -   [AI/ML Inference](./skills/cloud/gke-inference)
+    -   [Multi-tenancy](./skills/cloud/gke-multitenancy)
+    -   [Networking](./skills/cloud/gke-networking)
+    -   [Observability](./skills/cloud/gke-observability)
+    -   [Reliability](./skills/cloud/gke-reliability)
+    -   [Scaling](./skills/cloud/gke-scaling)
+    -   [Security](./skills/cloud/gke-security)
+    -   [Storage](./skills/cloud/gke-storage)
+    -   [Upgrades](./skills/cloud/gke-upgrades)
 -   [**Workload Manager Basics**](./skills/cloud/workload-manager-basics)
 -   [**Recipe: Onboarding to Google Cloud**](./skills/cloud/google-cloud-recipe-onboarding)
 -   [**Recipe: Authenticating to Google Cloud**](./skills/cloud/google-cloud-recipe-auth)
@@ -41,6 +59,21 @@ repo to install.
     - [Operational excellence](./skills/cloud/google-cloud-waf-operational-excellence)
     - [Performance optimization](./skills/cloud/google-cloud-waf-performance-optimization)
     - [Sustainability](./skills/cloud/google-cloud-waf-sustainability)
+-   **Google Advertising and Measurement**:
+    -   **Data Manager API**:
+        -   [Audience Ingestion](./skills/ads/data-manager-api/data-manager-api-audience-ingestion)
+        -   [Event Ingestion](./skills/ads/data-manager-api/data-manager-api-event-ingestion)
+    -   **Google Ads API**:
+        -   [MCP Setup](./skills/ads/google-ads-api/google-ads-api-mcp-setup)
+        -   [Quickstart](./skills/ads/google-ads-api/google-ads-api-quickstart)
+    -   **Google Mobile Ads**:
+        -   [Banner Ads](./skills/ads/google-mobile-ads/google-mobile-ads-banner)
+        -   [Get Started](./skills/ads/google-mobile-ads/google-mobile-ads-get-started)
+        -   [Interstitial Ads](./skills/ads/google-mobile-ads/google-mobile-ads-interstitial)
+        -   [Migrate to GMA Next-Gen SDK (Android)](./skills/ads/google-mobile-ads/google-mobile-ads-android-migrate-to-next-gen)
+        -   [Rewarded Ads](./skills/ads/google-mobile-ads/google-mobile-ads-rewarded)
+    -   **Interactive Media Ads (IMA)**:
+        -   [SDK Basics](./skills/ads/interactive-media-ads/ima-sdk-basics)
 
 ## Additional Google skills
 
