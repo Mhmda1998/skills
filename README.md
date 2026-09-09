@@ -139,6 +139,7 @@ repo to install.
   - [**DPoP Adoption & Identity Security Architecture**](./skills/identity/dpop-adoption)
   - [**GKE Platform Security**](./skills/cloud/gke-platform-security)
   - [**GKE Workload Security**](./skills/cloud/gke-workload-security)
+  - [**Google Cloud IAM Access Troubleshooter & Remediation Orchestrator**](./skills/cloud/iam-helper-for-troubleshooting)
   - [**Google Cloud Security Command Center Query Skill**](./skills/cloud/google-cloud-scc-query)
   - [**IAM Helper for Policy Management**](./skills/cloud/iam-helper-for-policy-management)
   - [**IAM Policy Simulator (v1 Allow)**](./skills/cloud/iam-helper-for-policy-simulator)
