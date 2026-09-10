@@ -13,8 +13,10 @@ description: >-
 
 To use this skill effectively:
 
-1.  **Generate Code**: Provide the Python snippets below to the user to help
-    them manage prompts in Agent Platform.
+1.  **Execute Operations via Python**: Run the Python snippets below using
+    `run_command` in the execution environment to manage prompts in Agent
+    Platform on behalf of the user. Do not delegate execution to the user or
+    claim lack of access once approved.
 
 2.  **No File System Search**: Do not try to find Python files or scripts on the
     file system for these operations.
@@ -38,7 +40,13 @@ accidental mutation or permanent deletion of prompt resources:
     *   **Same-turn restriction**: Do not execute the creation code in the same
         turn as presenting the confirmation prompt. Stop and wait for the user's
         reply; only execute after explicit 'Yes' / approval.
-    *   **Gold Standard Example**:
+    *   Every parameter in the card must trace back to something the user said.
+        The target model is a user choice, not a default: if the user did not
+        name one, ASK before building the card. Do not carry over the model that
+        appears in the examples here or in `references/create.md`.
+    *   **Gold Standard Example** — for a user who said "create a prompt called
+        Customer Support Greeting for gemini-2.5-pro with the template Hello
+        {{user_name}}, how can I help...":
 
         > I will create a prompt in Agent Platform with the following
         > parameters. Please confirm this information before I proceed:
@@ -99,10 +107,12 @@ these steps:
 > [!TIP]
 >
 > **Placeholder Parameter Replacement:** The Python scripts below use uppercase
-> string placeholders (like `"PROJECT_ID"`, `"LOCATION_ID"`, and `"PROMPT_ID"`).
-> You **MUST** dynamically replace these placeholders with the actual Project
-> ID, Region, and Prompt ID values provided in the user's prompt (or discovered
-> context) before generating or providing the scripts.
+> string placeholders (like `"PROJECT_ID"`, `"LOCATION_ID"`, `"PROMPT_ID"`, and
+> `"MODEL_ID"`). You **MUST** dynamically replace these placeholders with the
+> actual Project ID, Region, Prompt ID, and target model values provided in the
+> user's prompt (or discovered context) before generating or providing the
+> scripts. If the user did not supply one of these, ask -- a placeholder is
+> never satisfied by guessing a plausible value.
 
 ## 1. Managing Prompts via Agent Platform SDK
 
@@ -137,6 +147,12 @@ from vertexai.preview import prompts
 vertexai.init(project="PROJECT_ID", location="LOCATION_ID")
 
 retrieved_prompt = prompts.get(prompt_id="PROMPT_ID")
+# Attributes on retrieved Prompt:
+# - retrieved_prompt.prompt_id (e.g. "123456789...")
+# - retrieved_prompt.prompt_data (template text string)
+# - retrieved_prompt.model_name (target model)
+# - retrieved_prompt.prompt_name (display name, or
+#   retrieved_prompt._dataset.display_name)
 # Versions are supported: prompts.get(prompt_id="PROMPT_ID", version_id="2")
 
 # Assemble with variables (kwargs must match template variable names)
@@ -152,15 +168,16 @@ resource path internally using the project and location from `vertexai.init()`.
 
 **Confirmation Required**: As a Tier D (Destructive) operation, the agent MUST
 pause and request explicit, high-friction typed re-confirmation of the prompt ID
-from the user before generating or providing the deletion code. The action is
-irreversible.
+from the user before executing the deletion code. The action is irreversible.
+Once the user replies with typed confirmation (e.g., "I confirm"), proceed
+immediately to execute the deletion code via `run_command`.
 
 > [!IMPORTANT]
 >
-> **NEVER pre-emptively provide or execute any deletion code before receiving
-> the user's response in a new turn.** You must never speculate or assume that
-> confirmation will be given. Asking for confirmation and providing the code in
-> a single parallel turn is a severe safety violation.
+> **NEVER pre-emptively execute any deletion code before receiving the user's
+> response in a new turn.** You must never speculate or assume that confirmation
+> will be given. Asking for confirmation and running the code in a single
+> parallel turn is a severe safety violation.
 
 ```python
 import vertexai
@@ -170,6 +187,13 @@ vertexai.init(project="PROJECT_ID", location="LOCATION_ID")
 
 prompts.delete(prompt_id="PROMPT_ID")
 ```
+
+### Verification After Deletion
+
+When the user asks to list prompts or check that a deleted prompt is gone, list
+the prompts and explicitly state whether the deleted prompt ID is present. If it
+is not found, explicitly confirm: *"I have verified that the prompt with ID
+`<PROMPT_ID>` is no longer present in the project."*
 
 ## 2. Best Practices
 
@@ -181,8 +205,11 @@ prompts.delete(prompt_id="PROMPT_ID")
     enclosed in double curly braces) in your prompt templates.
 -   **Versioning**: Always tag or record version IDs when making updates to
     production prompts.
--   **Model Reference**: Specify the target model ID (e.g., `gemini-2.5-pro`)
-    when creating the prompt to ensure consistency.
+-   **Model Reference**: A prompt is created against a target model ID, which
+    the snippets carry as the `"MODEL_ID"` placeholder. Like the other
+    placeholders it is MUST-replace, and it is replaced from what the user
+    said -- if they named no model, ask. Do not substitute a plausible current
+    model such as `gemini-2.5-pro`.
 -   **Underlying Schema**: When using the Dataset API, always use the correct
     `metadata_schema_uri` and nested `metadata` structure to ensure the prompt
     is recognized by Agent Platform Studio and the Prompts SDK.

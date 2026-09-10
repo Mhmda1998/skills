@@ -1,30 +1,5 @@
 # Terraform template: strict secure serverless n-tier web application
 #
-# ==============================================================================
-# 9 Architectural Security Boundaries (Code as the Single Source of Truth)
-# Every configuration inside this file enforces these 9 architectural guards:
-# 1. Ingress Bypass Defense: Tier 1 frontend ingress is set strictly to
-#    INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER to prevent direct *.run.app bypasses.
-# 2. VPC-Internal Backend Ingress: Backend application and all microservice tiers (T2..TN)
-#    are set strictly to INGRESS_TRAFFIC_INTERNAL_ONLY (zero public internet exposure).
-# 3. Direct VPC Egress & Cloud DNS: Must use vpc_access (egress = ALL_TRAFFIC on frontend)
-#    along with a Cloud DNS Managed Private Zone (google_dns_managed_zone) mapping *.run.app
-#    directly to Private Google Access VIPs (199.36.153.4/30 / 199.36.153.8/30).
-# 4. Least-Privilege VPC Egress Firewalls: Enforces default-deny (0.0.0.0/0) and explicit
-#    allow rules for inter-tier connections (frontend -> backend 443/8080, and backend ->
-#    data tier 5432/6379 plus TCP 443 to PGA VIPs for sidecar IAM cert refresh).
-# 5. Firewall Rules Logging: Enable log_config on egress firewalls for network access auditing.
-# 6. Cloud CDN Edge Caching: Enable enable_cdn = true on Frontend global backend service.
-# 7. Private Service Connect (PSC) & Private Redis (PSA): Database public IP is explicitly
-#    disabled (ipv4_enabled = false), Cloud SQL uses Private Service Connect exclusively,
-#    and Memorystore Redis uses Private Services Access (100% private data endpoints).
-# 8. Cloud SQL Auth Proxy sidecar & IAM Auth: Backend container mounts built-in Cloud SQL sidecar
-#    Unix socket (/cloudsql/...) via cloud_sql_instance volume. DB_SOCKET_PATH (/cloudsql/...) is
-#    strongly recommended over direct TCP (DB_PSC_ENDPOINT) as the primary/default connection string
-#    for transparent IAM authentication (cloudsql.iam_authentication = on) and mTLS without password rotation.
-# 9. Organization API Perimeter: Supports wrapping run, sqladmin, secretmanager in a
-#    VPC Service Controls (VPC-SC) perimeter (enable_vpc_sc) to prevent API data exfiltration.
-# ==============================================================================
 
 terraform {
   required_version = ">= 1.3.0"
@@ -36,6 +11,10 @@ terraform {
     google-beta = {
       source  = "hashicorp/google-beta"
       version = ">= 4.50.0"
+    }
+    tls = {
+      source  = "hashicorp/tls"
+      version = ">= 4.0.0"
     }
   }
 }
@@ -68,6 +47,13 @@ variable "region" {
 variable "domain_name" {
   type        = string
   description = "The custom domain name for the application (e.g., app.example.com)."
+  default     = "app.example.com"
+}
+
+variable "use_self_signed_cert" {
+  type        = bool
+  description = "Set to true to generate a self-signed certificate for immediate sandbox/dev testing without requiring a registered public domain. Set to false to provision a production Google-managed SSL certificate (requires pointing your domain's DNS A record to the load balancer IP)."
+  default     = false
 }
 
 variable "frontend_image" {
@@ -199,122 +185,124 @@ resource "google_dns_record_set" "run_app_record" {
 }
 
 # ==========================================
-# 1.5 VPC Egress Firewall Rules (Least-Privilege Network Isolation)
+# 1.5 Cloud NGFW Network Firewall Policy (Least-Privilege Network Isolation)
 # ==========================================
+# MANDATORY PATTERN: Always configure explicit Cloud NGFW global or regional network firewall policies
+# (google_compute_network_firewall_policy and google_compute_network_firewall_policy_rule with enable_logging = var.enable_monitoring).
+# Do NOT use legacy/standard VPC firewall rules (google_compute_firewall).
+
+resource "google_compute_network_firewall_policy" "egress_policy" {
+  name        = "cloud-run-egress-policy"
+  description = "Zero-trust egress firewall policy for Cloud Run tiers"
+}
+
+resource "google_compute_network_firewall_policy_association" "egress_policy_association" {
+  name              = "cloud-run-egress-policy-association"
+  attachment_target = google_compute_network.vpc_network.id
+  firewall_policy   = google_compute_network_firewall_policy.egress_policy.name
+}
 
 # Deny unauthorized outbound egress from Cloud Run subnet by default
-resource "google_compute_firewall" "deny_all_egress" {
-  name      = "deny-cloud-run-default-egress"
-  network   = google_compute_network.vpc_network.id
-  direction = "EGRESS"
-  priority  = 65534 # Low priority default deny
+resource "google_compute_network_firewall_policy_rule" "deny_all_egress" {
+  firewall_policy = google_compute_network_firewall_policy.egress_policy.name
+  priority        = 65534 # Low priority default deny
+  action          = "deny"
+  direction       = "EGRESS"
+  rule_name       = "deny-cloud-run-default-egress"
 
-  deny {
-    protocol = "all"
+  match {
+    layer4_configs {
+      ip_protocol = "all"
+    }
+    dest_ip_ranges = ["0.0.0.0/0"]
   }
 
-  destination_ranges = ["0.0.0.0/0"]
   target_service_accounts = [
     google_service_account.frontend_sa.email,
     google_service_account.backend_sa.email
   ]
 
-  # Optional Firewall Rules Logging (toggled via enable_monitoring)
-  dynamic "log_config" {
-    for_each = var.enable_monitoring ? [1] : []
-    content {
-      metadata = "INCLUDE_ALL_METADATA"
-    }
-  }
+  enable_logging = var.enable_monitoring
 }
 
 # Allow Frontend SA to send egress only to Backend Application (VPC internal routing) and Google APIs
-resource "google_compute_firewall" "allow_frontend_egress" {
-  name      = "allow-frontend-to-backend-egress"
-  network   = google_compute_network.vpc_network.id
-  direction = "EGRESS"
-  priority  = 1000
+resource "google_compute_network_firewall_policy_rule" "allow_frontend_egress" {
+  firewall_policy = google_compute_network_firewall_policy.egress_policy.name
+  priority        = 1000
+  action          = "allow"
+  direction       = "EGRESS"
+  rule_name       = "allow-frontend-to-backend-egress"
 
-  allow {
-    protocol = "tcp"
-    ports    = ["443", "80"]
+  match {
+    layer4_configs {
+      ip_protocol = "tcp"
+      ports       = ["443", "80"]
+    }
+    dest_ip_ranges = [
+      google_compute_subnetwork.cloud_run_subnet.ip_cidr_range,
+      "199.36.153.4/30", # Private Google Access VIP ranges for *.run.app internal routing via Cloud DNS Managed Private Zone
+      "199.36.153.8/30"
+    ]
   }
 
-  destination_ranges = [
-    google_compute_subnetwork.cloud_run_subnet.ip_cidr_range,
-    "199.36.153.4/30", # Private Google Access VIP ranges for *.run.app internal routing via Cloud DNS Managed Private Zone
-    "199.36.153.8/30"
-  ]
   target_service_accounts = [
     google_service_account.frontend_sa.email
   ]
 
-  # Optional Firewall Rules Logging (toggled via enable_monitoring)
-  dynamic "log_config" {
-    for_each = var.enable_monitoring ? [1] : []
-    content {
-      metadata = "INCLUDE_ALL_METADATA"
-    }
-  }
+  enable_logging = var.enable_monitoring
 }
 
 # Allow Backend SA to send egress to Cloud SQL PSC Endpoint (TCP 5432) AND Private Google Access VIPs (TCP 443 for sqladmin.googleapis.com sidecar IAM cert exchange)
-resource "google_compute_firewall" "allow_backend_db_egress" {
-  name      = "allow-backend-to-cloudsql-psc-egress"
-  network   = google_compute_network.vpc_network.id
-  direction = "EGRESS"
-  priority  = 1000
+resource "google_compute_network_firewall_policy_rule" "allow_backend_db_egress" {
+  firewall_policy = google_compute_network_firewall_policy.egress_policy.name
+  priority        = 1001
+  action          = "allow"
+  direction       = "EGRESS"
+  rule_name       = "allow-backend-to-cloudsql-psc-egress"
 
-  allow {
-    protocol = "tcp"
-    ports    = ["5432", "443"] # PostgreSQL (5432) and HTTPS (443 to PGA VIPs for Cloud SQL Auth Proxy sidecar IAM cert exchange)
+  match {
+    layer4_configs {
+      ip_protocol = "tcp"
+      ports       = ["5432", "443"] # PostgreSQL (5432) and HTTPS (443 to PGA VIPs for Cloud SQL Auth Proxy sidecar IAM cert exchange)
+    }
+    dest_ip_ranges = [
+      "${google_compute_address.db_psc_ip.address}/32",
+      "199.36.153.4/30", # Private Google Access VIP ranges for sidecar sqladmin.googleapis.com IAM certificate refresh on startup
+      "199.36.153.8/30"
+    ]
   }
 
-  destination_ranges = [
-    "${google_compute_address.db_psc_ip.address}/32",
-    "199.36.153.4/30", # Private Google Access VIP ranges for sidecar sqladmin.googleapis.com IAM certificate refresh on startup
-    "199.36.153.8/30"
-  ]
   target_service_accounts = [
     google_service_account.backend_sa.email
   ]
 
-  # Optional Firewall Rules Logging (toggled via enable_monitoring)
-  dynamic "log_config" {
-    for_each = var.enable_monitoring ? [1] : []
-    content {
-      metadata = "INCLUDE_ALL_METADATA"
-    }
-  }
+  enable_logging = var.enable_monitoring
 }
 
 # Allow Backend API SA to send egress to Redis cache when enabled
-resource "google_compute_firewall" "allow_backend_redis_egress" {
-  count     = var.enable_redis ? 1 : 0
-  name      = "allow-backend-to-redis-egress"
-  network   = google_compute_network.vpc_network.id
-  direction = "EGRESS"
-  priority  = 1000
+resource "google_compute_network_firewall_policy_rule" "allow_backend_redis_egress" {
+  count           = var.enable_redis ? 1 : 0
+  firewall_policy = google_compute_network_firewall_policy.egress_policy.name
+  priority        = 1002
+  action          = "allow"
+  direction       = "EGRESS"
+  rule_name       = "allow-backend-to-redis-egress"
 
-  allow {
-    protocol = "tcp"
-    ports    = ["6379"] # Redis
+  match {
+    layer4_configs {
+      ip_protocol = "tcp"
+      ports       = ["6379"] # Redis
+    }
+    dest_ip_ranges = [
+      "${google_redis_instance.private_cache[0].host}/32"
+    ]
   }
 
-  destination_ranges = [
-    "${google_redis_instance.private_cache[0].host}/32"
-  ]
   target_service_accounts = [
     google_service_account.backend_sa.email
   ]
 
-  # Optional Firewall Rules Logging (toggled via enable_monitoring)
-  dynamic "log_config" {
-    for_each = var.enable_monitoring ? [1] : []
-    content {
-      metadata = "INCLUDE_ALL_METADATA"
-    }
-  }
+  enable_logging = var.enable_monitoring
 }
 
 # ==========================================
@@ -358,7 +346,7 @@ resource "google_sql_database_instance" "private_db" {
         query_insights_enabled  = true
         query_string_length     = 1024
         record_application_tags = true
-        record_client_address   = true
+        # Note: record_client_address is omitted because it is not supported for Cloud SQL instances with PSC connectivity enabled.
       }
     }
   }
@@ -683,9 +671,46 @@ resource "google_compute_backend_service" "frontend_lb_backend" {
   }
 }
 
-# 6.4 Google-managed SSL Certificate
+# 6.4a Self-Signed SSL Certificate (For immediate sandbox/dev testing without a registered domain)
+resource "tls_private_key" "dev_key" {
+  count     = var.use_self_signed_cert ? 1 : 0
+  algorithm = "RSA"
+  rsa_bits  = 2048
+}
+
+resource "tls_self_signed_cert" "dev_cert" {
+  count           = var.use_self_signed_cert ? 1 : 0
+  private_key_pem = tls_private_key.dev_key[0].private_key_pem
+
+  subject {
+    common_name  = var.domain_name
+    organization = "Sandbox Dev"
+  }
+
+  validity_period_hours = 8760
+
+  allowed_uses = [
+    "key_encipherment",
+    "digital_signature",
+    "server_auth",
+  ]
+}
+
+resource "google_compute_ssl_certificate" "self_signed" {
+  count       = var.use_self_signed_cert ? 1 : 0
+  name_prefix = "self-signed-cert-"
+  private_key = tls_private_key.dev_key[0].private_key_pem
+  certificate = tls_self_signed_cert.dev_cert[0].cert_pem
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+# 6.4b Google-managed SSL Certificate (For production with registered domain)
 resource "google_compute_managed_ssl_certificate" "default" {
-  name = "secure-3tier-ssl-cert"
+  count = var.use_self_signed_cert ? 0 : 1
+  name  = "secure-3tier-ssl-cert"
   managed {
     domains = [var.domain_name]
   }
@@ -697,11 +722,14 @@ resource "google_compute_url_map" "default" {
   default_service = google_compute_backend_service.frontend_lb_backend.id
 }
 
-# 6.6 Target HTTPS Proxy
+# 6.6 Target HTTPS Proxy (Dynamically binds self-signed or Google-managed cert)
 resource "google_compute_target_https_proxy" "default" {
   name             = "secure-3tier-https-proxy"
   url_map          = google_compute_url_map.default.id
-  ssl_certificates = [google_compute_managed_ssl_certificate.default.id]
+  ssl_certificates = concat(
+    google_compute_ssl_certificate.self_signed[*].id,
+    google_compute_managed_ssl_certificate.default[*].id
+  )
 }
 
 # 6.7 Global Forwarding Rule
@@ -761,6 +789,15 @@ output "frontend_cloud_run_url" {
 output "backend_cloud_run_url" {
   value       = google_cloud_run_v2_service.backend_application.uri
   description = "The internal private URL of the Backend Application Cloud Run service (completely unreachable from public internet)."
+}
+
+output "ssl_verification_instructions" {
+  value = var.use_self_signed_cert ? (
+    "Self-signed certificate deployed. Test immediately via: curl -k https://${google_compute_global_address.lb_ip.address}/"
+  ) : (
+    "Google-managed certificate deployed for ${var.domain_name}. Create a DNS A record pointing ${var.domain_name} -> ${google_compute_global_address.lb_ip.address}, then monitor status: gcloud compute ssl-certificates describe secure-3tier-ssl-cert --global"
+  )
+  description = "Immediate verification instructions for the configured SSL mode."
 }
 
 output "vpc_sc_enabled" {
